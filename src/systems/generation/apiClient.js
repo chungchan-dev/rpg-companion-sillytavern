@@ -22,6 +22,7 @@ import { renderInfoBox } from '../rendering/infoBox.js';
 import { renderThoughts } from '../rendering/thoughts.js';
 import { renderInventory } from '../rendering/inventory.js';
 import { renderQuests } from '../rendering/quests.js';
+import { i18n } from '../../core/i18n.js';
 
 // Store the original preset name to restore after tracker generation
 let originalPresetName = null;
@@ -104,8 +105,8 @@ export async function updateRPGData(renderUserStats, renderInfoBox, renderThough
 
         // Update button to show "Updating..." state
         const $updateBtn = $('#rpg-manual-update');
-        const originalHtml = $updateBtn.html();
-        $updateBtn.html('<i class="fa-solid fa-spinner fa-spin"></i> Updating...').prop('disabled', true);
+        const updatingText = i18n.getTranslation('template.mainPanel.updating') || 'Updating...';
+        $updateBtn.html(`<i class="fa-solid fa-spinner fa-spin"></i> ${updatingText}`).prop('disabled', true);
 
         // Save current preset name before switching (if we're going to switch)
         if (extensionSettings.useSeparatePreset) {
@@ -143,6 +144,35 @@ export async function updateRPGData(renderUserStats, renderInfoBox, renderThough
             // Store RPG data for the last assistant message (separate mode)
             const lastMessage = chat && chat.length > 0 ? chat[chat.length - 1] : null;
             // console.log('[RPG Companion] Last message is_user:', lastMessage ? lastMessage.is_user : 'no message');
+
+            // Update lastGeneratedData for display (regardless of message type)
+            if (parsedData.userStats) {
+                lastGeneratedData.userStats = parsedData.userStats;
+                parseUserStats(parsedData.userStats);
+            }
+            if (parsedData.infoBox) {
+                lastGeneratedData.infoBox = parsedData.infoBox;
+            }
+            if (parsedData.characterThoughts) {
+                lastGeneratedData.characterThoughts = parsedData.characterThoughts;
+            }
+
+            // When saveTrackerHistory is enabled, store tracker data on the user's message too
+            // This allows scrolling through history and seeing trackers at each point
+            if (extensionSettings.saveTrackerHistory && lastMessage && lastMessage.is_user) {
+                if (!lastMessage.extra) {
+                    lastMessage.extra = {};
+                }
+                lastMessage.extra.rpg_companion_data = {
+                    userStats: parsedData.userStats,
+                    infoBox: parsedData.infoBox,
+                    characterThoughts: parsedData.characterThoughts,
+                    timestamp: Date.now()
+                };
+                // console.log('[RPG Companion] 💾 Stored tracker data on user message for history');
+            }
+
+            // Also store on assistant message if present (existing behavior)
             if (lastMessage && !lastMessage.is_user) {
                 if (!lastMessage.extra) {
                     lastMessage.extra = {};
@@ -159,57 +189,30 @@ export async function updateRPGData(renderUserStats, renderInfoBox, renderThough
                 };
 
                 // console.log('[RPG Companion] Stored separate mode RPG data for message swipe', currentSwipeId);
-
-                // Update lastGeneratedData for display AND future commit
-                if (parsedData.userStats) {
-                    lastGeneratedData.userStats = parsedData.userStats;
-                    parseUserStats(parsedData.userStats);
-                }
-                if (parsedData.infoBox) {
-                    lastGeneratedData.infoBox = parsedData.infoBox;
-                }
-                if (parsedData.characterThoughts) {
-                    lastGeneratedData.characterThoughts = parsedData.characterThoughts;
-                }
-                // console.log('[RPG Companion] 💾 SEPARATE MODE: Updated lastGeneratedData:', {
-                //     userStats: lastGeneratedData.userStats ? 'exists' : 'null',
-                //     infoBox: lastGeneratedData.infoBox ? 'exists' : 'null',
-                //     characterThoughts: lastGeneratedData.characterThoughts ? 'exists' : 'null'
-                // });
-
-                // Only auto-commit on TRULY first generation (no committed data exists at all)
-                // This prevents auto-commit after refresh when we have saved committed data
-                const hasAnyCommittedContent = (
-                    (committedTrackerData.userStats && committedTrackerData.userStats.trim() !== '') ||
-                    (committedTrackerData.infoBox && committedTrackerData.infoBox.trim() !== '' && committedTrackerData.infoBox !== 'Info Box\n---\n') ||
-                    (committedTrackerData.characterThoughts && committedTrackerData.characterThoughts.trim() !== '' && committedTrackerData.characterThoughts !== 'Present Characters\n---\n')
-                );
-
-                // Only commit if we have NO committed content at all (truly first time ever)
-                if (!hasAnyCommittedContent) {
-                    committedTrackerData.userStats = parsedData.userStats;
-                    committedTrackerData.infoBox = parsedData.infoBox;
-                    committedTrackerData.characterThoughts = parsedData.characterThoughts;
-                    // console.log('[RPG Companion] 🔆 FIRST TIME: Auto-committed tracker data');
-                }
-
-                // Render the updated data
-                renderUserStats();
-                renderInfoBox();
-                renderThoughts();
-                renderInventory();
-                renderQuests();
-            } else {
-                // No assistant message to attach to - just update display
-                if (parsedData.userStats) {
-                    parseUserStats(parsedData.userStats);
-                }
-                renderUserStats();
-                renderInfoBox();
-                renderThoughts();
-                renderInventory();
-                renderQuests();
             }
+
+            // Only commit on TRULY first generation (no committed data exists at all)
+            // This prevents auto-commit after refresh when we have saved committed data
+            const hasAnyCommittedContent = (
+                (committedTrackerData.userStats && committedTrackerData.userStats.trim() !== '') ||
+                (committedTrackerData.infoBox && committedTrackerData.infoBox.trim() !== '' && committedTrackerData.infoBox !== 'Info Box\n---\n') ||
+                (committedTrackerData.characterThoughts && committedTrackerData.characterThoughts.trim() !== '' && committedTrackerData.characterThoughts !== 'Present Characters\n---\n')
+            );
+
+            // Only commit if we have NO committed content at all (truly first time ever)
+            if (!hasAnyCommittedContent) {
+                committedTrackerData.userStats = parsedData.userStats;
+                committedTrackerData.infoBox = parsedData.infoBox;
+                committedTrackerData.characterThoughts = parsedData.characterThoughts;
+                // console.log('[RPG Companion] 🔆 FIRST TIME: Auto-committed tracker data');
+            }
+
+            // Render the updated data (outside the message check, always render)
+            renderUserStats();
+            renderInfoBox();
+            renderThoughts();
+            renderInventory();
+            renderQuests();
 
             // Save to chat metadata
             saveChatData();
@@ -229,7 +232,8 @@ export async function updateRPGData(renderUserStats, renderInfoBox, renderThough
 
         // Restore button to original state
         const $updateBtn = $('#rpg-manual-update');
-        $updateBtn.html('<i class="fa-solid fa-sync"></i> Refresh RPG Info').prop('disabled', false);
+        const refreshText = i18n.getTranslation('template.mainPanel.refreshRpgInfo') || 'Refresh RPG Info';
+        $updateBtn.html(`<i class="fa-solid fa-sync"></i> ${refreshText}`).prop('disabled', false);
 
         // Reset the flag after tracker generation completes
         // This ensures the flag persists through both main generation AND tracker generation

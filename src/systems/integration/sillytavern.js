@@ -34,6 +34,10 @@ import { renderQuests } from '../rendering/quests.js';
 // Utils
 import { getSafeThumbnailUrl } from '../../utils/avatars.js';
 
+// Chapter checkpoint
+import { updateAllCheckpointIndicators } from '../ui/checkpointUI.js';
+import { restoreCheckpointOnLoad } from '../features/chapterCheckpoint.js';
+
 /**
  * Commits the tracker data from the last assistant message to be used as source for next generation.
  * This should be called when the user has replied to a message, ensuring all swipes of the next
@@ -73,6 +77,7 @@ export function commitTrackerData() {
 /**
  * Event handler for when the user sends a message.
  * Sets the flag to indicate this is NOT a swipe.
+ * In separate mode with auto-update disabled, commits the displayed tracker data.
  */
 export function onMessageSent() {
     if (!extensionSettings.enabled) return;
@@ -80,6 +85,21 @@ export function onMessageSent() {
     // User sent a new message - NOT a swipe
     setLastActionWasSwipe(false);
     // console.log('[RPG Companion] 🟢 EVENT: onMessageSent - lastActionWasSwipe =', lastActionWasSwipe);
+
+    // In separate mode with auto-update disabled, commit displayed tracker when user sends a message
+    if (extensionSettings.generationMode === 'separate' && !extensionSettings.autoUpdate) {
+        // Commit whatever is currently displayed in lastGeneratedData
+        if (lastGeneratedData.userStats || lastGeneratedData.infoBox || lastGeneratedData.characterThoughts) {
+            committedTrackerData.userStats = lastGeneratedData.userStats;
+            committedTrackerData.infoBox = lastGeneratedData.infoBox;
+            committedTrackerData.characterThoughts = lastGeneratedData.characterThoughts;
+
+            // Save to chat metadata
+            saveChatData();
+
+            // console.log('[RPG Companion] 💾 Committed displayed tracker on user message (auto-update disabled)');
+        }
+    }
 }
 
 /**
@@ -142,14 +162,20 @@ export async function onMessageReceived(data) {
 
             // Remove the tracker code blocks from the visible message
             let cleanedMessage = responseText;
-            // Remove all code blocks that contain tracker data
-            cleanedMessage = cleanedMessage.replace(/```[^`]*?Stats\s*\n\s*---[^`]*?```\s*/gi, '');
-            cleanedMessage = cleanedMessage.replace(/```[^`]*?Info Box\s*\n\s*---[^`]*?```\s*/gi, '');
-            cleanedMessage = cleanedMessage.replace(/```[^`]*?Present Characters\s*\n\s*---[^`]*?```\s*/gi, '');
-            // Remove any stray "---" dividers that might appear after the code blocks
-            cleanedMessage = cleanedMessage.replace(/^\s*---\s*$/gm, '');
-            // Clean up multiple consecutive newlines
-            cleanedMessage = cleanedMessage.replace(/\n{3,}/g, '\n\n');
+
+            // Only remove trackers if saveTrackerHistory is disabled
+            // When enabled, trackers are in <trackers> XML tags which SillyTavern auto-hides
+            if (!extensionSettings.saveTrackerHistory) {
+                // Remove all code blocks that contain tracker data
+                cleanedMessage = cleanedMessage.replace(/```[^`]*?Stats\s*\n\s*---[^`]*?```\s*/gi, '');
+                cleanedMessage = cleanedMessage.replace(/```[^`]*?Info Box\s*\n\s*---[^`]*?```\s*/gi, '');
+                cleanedMessage = cleanedMessage.replace(/```[^`]*?Present Characters\s*\n\s*---[^`]*?```\s*/gi, '');
+                // Remove any stray "---" dividers that might appear after the code blocks
+                cleanedMessage = cleanedMessage.replace(/^\s*---\s*$/gm, '');
+                // Clean up multiple consecutive newlines
+                cleanedMessage = cleanedMessage.replace(/\n{3,}/g, '\n\n');
+            }
+            // Note: <trackers> XML tags are automatically hidden by SillyTavern
 
             // Update the message in chat history
             lastMessage.mes = cleanedMessage.trim();
@@ -197,6 +223,9 @@ export async function onMessageReceived(data) {
         setIsPlotProgression(false);
         // console.log('[RPG Companion] Plot progression generation completed');
     }
+
+    // Re-apply checkpoint in case SillyTavern unhid messages during generation
+    await restoreCheckpointOnLoad();
 }
 
 /**
@@ -227,6 +256,9 @@ export function onCharacterChanged() {
 
     // Update chat thought overlays
     updateChatThoughts();
+
+    // Update checkpoint indicators for the loaded chat
+    updateAllCheckpointIndicators();
 }
 
 /**
@@ -345,4 +377,14 @@ export function clearExtensionPrompts() {
     setExtensionPrompt('rpg-companion-context', '', extension_prompt_types.IN_CHAT, 1, false);
     // Note: rpg-companion-plot is not cleared here since it's passed via quiet_prompt option
     // console.log('[RPG Companion] Cleared all extension prompts');
+}
+
+/**
+ * Event handler for when generation stops or ends
+ * Re-applies checkpoint if SillyTavern unhid messages
+ */
+export async function onGenerationEnded() {
+    // SillyTavern may auto-unhide messages when generation stops
+    // Re-apply checkpoint if one exists
+    await restoreCheckpointOnLoad();
 }
